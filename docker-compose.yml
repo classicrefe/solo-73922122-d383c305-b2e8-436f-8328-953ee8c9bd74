@@ -34,6 +34,9 @@ services:
       MAX_DIFF_TYPES: "20"
       WORK_DIR: /tmp/recon-work
       PG_STATEMENT_TIMEOUT_MS: "28000"
+      # 首次启动（变更日志为空）时生成 3 条 INSERT/UPDATE/DELETE 示例，
+      # 便于 /docs 里直接演示 /readings/changes；生产环境设为 "false"
+      SEED_DEMO_CHANGES: "true"
     ports:
       - "8000:8000"
     volumes:

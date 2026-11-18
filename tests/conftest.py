@@ -74,6 +74,18 @@ def client(pg_dsn, monkeypatch):
     monkeypatch.setattr(manager_mod, "manager", fresh)
     monkeypatch.setattr("app.main.manager", fresh)
 
+    # 变更日志按测试隔离：确保捕获结构存在，并清空历史变更
+    from app.change_capture import ensure_change_capture
+
+    ensure_change_capture(pg_dsn)
+    import psycopg
+
+    conn = psycopg.connect(pg_dsn, autocommit=True)
+    try:
+        conn.execute("TRUNCATE TABLE public.reading_changes RESTART IDENTITY")
+    finally:
+        conn.close()
+
     from fastapi.testclient import TestClient
 
     with TestClient(app) as c:

@@ -39,6 +39,11 @@ class Settings:
     # 暂存目录（容器内），独立挂载 tmpfs / 卷
     work_dir: str = _env("WORK_DIR", "/tmp/recon-work")
 
+    # 演示用：变更日志为空时，启动后生成 3 条示例变更（readings 事后还原）
+    seed_demo_changes: bool = _env("SEED_DEMO_CHANGES", "false").lower() in (
+        "1", "true", "yes", "on",
+    )
+
     # 允许出现在结果集中的列类型（PostgreSQL 类型名 -> psycopg 加载后的 Python 类型）
     allowed_pg_types: tuple[str, ...] = ("bigint", "text")
 

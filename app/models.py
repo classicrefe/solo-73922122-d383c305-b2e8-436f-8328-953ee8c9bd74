@@ -1,7 +1,7 @@
 """API 请求 / 响应模型。"""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -60,3 +60,42 @@ class JobOut(BaseModel):
     @staticmethod
     def utcnow() -> datetime:
         return datetime.now(timezone.utc)
+
+
+class ReadingSnapshot(BaseModel):
+    """一条读数的前后镜像（快照）；变更前后不存在的一侧为 null。"""
+
+    meter_id: int = Field(..., description="表号")
+    read_time: datetime = Field(..., description="读数时刻（UTC）")
+    wh: int = Field(..., description="累计电量 Wh")
+
+
+class ReadingChange(BaseModel):
+    """readings 的一次行级变更。"""
+
+    cursor: str = Field(..., description="本条变更的接续游标")
+    operation: Literal["INSERT", "UPDATE", "DELETE"]
+    changed_at: datetime = Field(..., description="变更写入时间（UTC）")
+    before: ReadingSnapshot | None = Field(
+        None, description="变更前；INSERT 为 null"
+    )
+    after: ReadingSnapshot | None = Field(
+        None, description="变更后；DELETE 为 null"
+    )
+    affected_meter_ids: list[int] = Field(
+        ...,
+        description="需要重算的表号（变更前后表号的并集，升序）",
+    )
+    affected_utc_dates: list[date] = Field(
+        ...,
+        description="需要重算的 UTC 日期（变更前后时刻所在日期，去重升序）",
+    )
+
+
+class ReadingChangesPage(BaseModel):
+    items: list[ReadingChange]
+    next_cursor: str | None = Field(
+        None,
+        description="接续游标；空页时与请求游标相同（不推进），从头读时为 null",
+    )
+    has_more: bool = Field(..., description="是否还有更多已可读的变更")

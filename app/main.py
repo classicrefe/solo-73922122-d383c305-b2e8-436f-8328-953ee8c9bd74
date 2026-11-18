@@ -1,13 +1,32 @@
 """FastAPI 应用入口与 HTTP 路由。"""
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException
+import logging
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 
+from . import changes as changesmod
 from . import db as dbmod
+from .change_capture import ChangeCaptureError, ensure_change_capture
 from .manager import SlotBusyError, manager
-from .models import CreateJobRequest, JobOut
+from .models import CreateJobRequest, JobOut, ReadingChangesPage
 from .sqlvalidation import SqlValidationError
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # 幂等安装变更捕获（表 + 触发器）；数据库暂不可用时降级为告警，
+    # 首次访问 /readings/changes 时还会再次尝试。
+    try:
+        ensure_change_capture(attempts=10, retry_delay=0.5)
+    except ChangeCaptureError as exc:
+        logger.warning("启动时安装变更捕获失败：%s", exc)
+    yield
+
 
 app = FastAPI(
     title="电表日结 SQL 核对 API",
@@ -15,8 +34,12 @@ app = FastAPI(
         "提交两条只读 SELECT，基于同一已提交快照并行读取，"
         "按行内容与出现次数做有序多重集核对（忽略行序，NULL≠空串），"
         "差异最多展示 20 种。单轮 30 秒，全局同时只允许一个任务。"
+        "\n\n"
+        "另外提供 /readings/changes 分页接口，按提交顺序安全地下发"
+        " readings 的 INSERT / UPDATE / DELETE，供下游日结库重算受影响的表号与 UTC 日期。"
     ),
-    version="1.0.0",
+    version="1.1.0",
+    lifespan=lifespan,
 )
 
 
@@ -24,6 +47,31 @@ app = FastAPI(
 def health() -> dict:
     """存活探针；不触碰数据库。"""
     return {"status": "ok"}
+
+
+@app.get("/readings/changes", response_model=ReadingChangesPage, tags=["读数变更"])
+def list_reading_changes(
+    cursor: str | None = Query(
+        None, description="上一页返回的 next_cursor；省略则从头开始"
+    ),
+    limit: int = Query(
+        50, ge=1, le=100, description="每页条数，1～100"
+    ),
+) -> ReadingChangesPage:
+    """按提交顺序分页读取读数变更。
+
+    只返回事务已结束（且按 MVCC 可见）的变更；尚未提交的较早事务会
+    阻止更大 xid 的变更被越过，回滚变更不可见，空页不推进游标。
+    """
+    try:
+        items, next_cursor, has_more = changesmod.fetch_page(cursor, limit)
+    except changesmod.InvalidCursor as exc:
+        raise HTTPException(status_code=400, detail=f"游标非法：{exc}") from exc
+    except (changesmod.ChangesQueryError, ChangeCaptureError) as exc:
+        raise HTTPException(status_code=503, detail={"message": str(exc)}) from exc
+    return ReadingChangesPage(
+        items=items, next_cursor=next_cursor, has_more=has_more
+    )
 
 
 @app.get("/jobs", response_model=list[JobOut], tags=["核对任务"])

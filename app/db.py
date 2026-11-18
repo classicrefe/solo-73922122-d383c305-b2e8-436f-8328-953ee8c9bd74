@@ -35,9 +35,9 @@ class ColumnMeta:
     pg_type: str  # "bigint" | "text"
 
 
-def _open_connection() -> psycopg.Connection:
+def open_connection(dsn: str | None = None) -> psycopg.Connection:
     conn = psycopg.connect(
-        settings.pg_dsn,
+        dsn or settings.pg_dsn,
         connect_timeout=settings.connect_timeout,
         autocommit=True,          # 事务边界自己用 BEGIN 显式控制
         application_name="recon-api",
@@ -66,7 +66,7 @@ class SnapshotSession:
 
     def open(self) -> None:
         # 快照连接：开启可重复读只读事务并导出快照
-        snap_conn = _open_connection()
+        snap_conn = open_connection()
         try:
             snap_conn.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
             row = snap_conn.execute("SELECT pg_export_snapshot()").fetchone()
@@ -77,7 +77,7 @@ class SnapshotSession:
 
             # 两条独立读取连接，绑定同一快照
             for _ in range(2):
-                conn = _open_connection()
+                conn = open_connection()
                 conn.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
                 # 快照标识来自 pg_export_snapshot，用 Literal 安全内联
                 conn.execute(
@@ -117,7 +117,7 @@ class SnapshotSession:
         if not pids:
             return
         try:
-            admin = _open_connection()
+            admin = open_connection()
             try:
                 admin.execute(
                     "SELECT pg_terminate_backend(pid) FROM unnest(%s::int[]) AS pid",
@@ -134,14 +134,14 @@ class SnapshotSession:
                 return
             self._closed = True
             for conn in self.readers:
-                _quiet_close(conn)
+                quiet_close(conn)
             if self._snapshot_conn is not None:
-                _quiet_close(self._snapshot_conn)
+                quiet_close(self._snapshot_conn)
             self.readers = []
             self._snapshot_conn = None
 
 
-def _quiet_close(conn: psycopg.Connection) -> None:
+def quiet_close(conn: psycopg.Connection) -> None:
     try:
         conn.close()
     except Exception:
